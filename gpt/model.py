@@ -1,54 +1,17 @@
-# ====================================
+# =================================================================================================
 # MODEL
-#
-# Torch instructions say explicitly to implement the forward method for each module.
-# This never gets called, instead just call the module itself.
-#
-# nn.Linear(features_in_dim, features_out_dim)
 #
 # Throughout use B,T,C to indicate dimensions:
 # B = BATCH_SIZE
 # T = TIME (BLOCK_SIZE i.e., where in the sequence we are within the allowed sequence limit)
-# C = CHANNELS (this was VOCAB_SIZE in bigram model, here N_EMND)
+# C = CHANNELS (this was VOCAB_SIZE in bigram model, now it is N_EMND i.e., embedding dimension)
 #
 # The network is quite deep, need 2 additoinal steps to get around optimisation issues
 # - 1: skip/residual connections
-#   - have a residual pathway from which can fork off and do some computation and then return to it
+# - 2: layer norm
 #
-#       Xt
-#       | \
-#       |  \
-#       |   \
-#       |   / <COMPUTATION HAPPES ON THIS PATH>
-#       |  /
-#       |/
-#     <addition>
-#       Xt+1
-#
-#   - addition distributes gradients equally to both branches
-#     - so the gradients go through the addition operation directly "from supervision" all the way back to the input
-#     - but they also fork off and go through the other branch with the additional computations
-#   - the residual blocks (i.e., the computation fork off) are intitialised to contribute little at the beginning
-#     so the gradient is unimpeded and just flows
-#   - over time, during optimisation, they start to contribute
-#   - this helps dramatically with optimisation
-#
-# - 2: layer norm:
-#   - very similar to batch norm
-#       - across the batch dimension, make sure any individual neuron has unit Gaussian distribution
-#       - i.e., it normalises every column in the bach dimension to have 0 mean and 1 SD
-#   - here normalize the rows rather than the columns (TODO: what are the rows here?!)
-#   - NOTE: original transform paper applied layer norm after the transform
-#       but now it's common to do it before ("pre-norm formulation")
-#
-# Lasty, also include dropout.
-#   - there are a few places throughout where this is applied
-#   - used to prevent overfitting, regularisation technique
-#   - every forward pass, randomly shut off a subset of neurons (turn them to 0)
-#   - sort of trains an emsenble of subnetworks
-#   - at inference it is not applied
-#
-# ====================================
+# Lasty, also include dropout (there are a few places throughout where this is applied)
+# =================================================================================================
 
 import torch
 import torch.nn as nn
@@ -66,30 +29,26 @@ class Head(nn.Module):
         self.key = nn.Linear(n_embd, head_size, bias=False)
         self.query = nn.Linear(n_embd, head_size, bias=False)
         self.value = nn.Linear(n_embd, head_size, bias=False)
-        # to save parameters that should not be optimised, use "self.register_buffer"
-        # this is a triangular matrix, ones on the lower triangular and 0s in upper
+        # this is a triangular matrix, 1s on the lower triangular and 0s in upper
         self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
-        # dropout
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        # get the BLOCK_SIZE (i.e., T)
-        _, T, _ = x.shape  # (B,T,C) where C=N_EMBD
+        # (B,T,C) where T=BLOCK_SIZE and C=N_EMBD
+        _, T, _ = x.shape
 
         # each token emits a key, query and a value vector
         # query: the search i.e., what I am looking for
         # key: what do I contain i.e., context, tags, etc.
         # value: the thing you are searching for
-        k = self.key(x)  # (B,T,C) but C = head_size
-        q = self.query(x)  # (B,T,C) but C = head_size
-        v = self.value(x)  # (B,T,C) but C= head_size
+        # all are (B,T,C) where C = head_size
+        k = self.key(x)
+        q = self.query(x)
+        v = self.value(x)
 
-        # compute attention scores ("affinities"), all keys communicate with all queries
+        # compute attention scores ("affinities")
         # for matrix multiplication need to transpose and handle the channel dimension
-        # attention also gets scaled by sqrt of head_size:
-        # - the scaling is there to control variance at initialization.
-        # - without scaling we might get very divergent values which, when passed through softmax, leads to a very peaky output
-        # - i.e, lot of weight given to the large values and very little to the other ones --> avoid this
+        # attention also gets scaled by sqrt of head_size to control variance at initialization
         head_size = k.size(-1)
         att = (
             q @ k.transpose(-2, -1) * head_size**-0.5
@@ -114,36 +73,30 @@ class Head(nn.Module):
 
 class MultiHead(nn.Module):
     """
-    Multi-head attention:
-    - multiple self-attention heads processed in parallel
+    Multi-head attention: multiple self-attention heads processed in parallel
     """
 
     def __init__(self, num_heads, head_size, n_embd, block_size, dropout):
         super().__init__()
-        # ModuleList can be indexed like a Python list but it also "does the right torch stuff"
-        # presumably that means the parameters within are registered for optimisation etc.
         self.heads = nn.ModuleList(
             [Head(head_size, n_embd, block_size, dropout) for _ in range(num_heads)]
         )
-        # return linear projection - from n_embd to n_embd
-        # this is described in the paper as a step after the concatenation
+        # call this a projection rather than transformation because dims are unchanged
+        # (a projection goees back to same vector space and leaves the image unchanged)
+        # just following the paper implementation here
         self.proj = nn.Linear(n_embd, n_embd)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # concatenate the individual head outputs over the channels dimension
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        # apply linear transformation to the outcome of above layer
-        # "this is a projection back into the residual pathway"
-        # also apply dropout
         out = self.dropout(self.proj(out))
         return out
 
 
-class FFN(nn.Module):
+class FNN(nn.Module):
     """
-    Feed-forward net:
-    - a simple linear layer followed by a non-linearity
+    Feed-forward neural net: two linear transformations with a ReLU activation in between
     """
 
     def __init__(self, n_embd, dropout):
@@ -155,9 +108,8 @@ class FFN(nn.Module):
             # so multiply by 4 below to reflect the same factor
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
-            # below is a projection layer back into the residual pathway
             nn.Linear(4 * n_embd, n_embd),
-            # dropout
+            # for ease include dropout here, otherwise could apply as a separate step as above
             nn.Dropout(dropout),
         )
 
@@ -167,29 +119,25 @@ class FFN(nn.Module):
 
 class Block(nn.Module):
     """
-    Transformer block: 'communication followed by computation'
-    - a block has N heads running in parallel followed by a FFN
+    Transformer block: a block has N heads running in parallel followed by a FFN
     """
 
     def __init__(self, n_embd, n_head, block_size, dropout):
         # n_embd: embedding dimension, n_head: the number of heads we'd like
         super().__init__()
         # due to having multiple heads, reduce head size to reduce computation
-        # this is described in the paper
-        # if had a single head - this stays n_embd sized
+        # if have a single head - this stays n_embd sized (same as in paper)
         head_size = n_embd // n_head
         # self-attention i.e., the "communication part"
         self.sa = MultiHead(n_head, head_size, n_embd, block_size, dropout)
         # feed-forward net i.e., the "computation part"
-        self.ffwd = FFN(n_embd, dropout)
-        # apply layer norm (at each step within block
+        self.ffwd = FNN(n_embd, dropout)
+        # apply layer norm (at each step within block)
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
 
     def forward(self, x):
-        # this implements residual connections
-        # i.e., have both x and the fork off with computations from which we come back
-        # do this at both steps within the block (+ apply layer norm)
+        # NOTE: each step also implements a residual connection (due to the + operation)
 
         # 1. apply self attention
         x = x + self.sa(self.ln1(x))
@@ -207,40 +155,37 @@ class GPT(nn.Module):
     def __init__(
         self, vocab_size, n_embd, block_size, n_head, n_blocks, dropout, device
     ):
-        # always have to start with nn.Module init
         super().__init__()
-        # nn.Embedding is a simple look up table populated with values drawn
-        # from standard normal (can access as embedding.weight)
+        #  token look up table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        # need also a position table to track position info as this gets lots in attention
+        # need also a position table to track position info
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        # create N_BLOCKS with N_HEAD each - this is just a sequential operation
+        # create sequence of N_BLOCKS with N_HEAD each
         self.blocks = nn.Sequential(
             *[Block(n_embd, n_head, block_size, dropout) for _ in range(n_blocks)]
         )
         # final layer norm - apply after all blocks
         self.ln_f = nn.LayerNorm(n_embd)
-        # linear transformation to go from n_embd to vocab_size dimension
+        # last linear transformation to go from n_embd to vocab_size dimension
         self.lm_head = nn.Linear(n_embd, vocab_size)
         self.device = device
 
     def forward(self, inputs_idx, targets_idx=None):
         """
-        function to evaluate model given inputs and expected output
-        returns logits over tokens and the loss (unless targets not provided)
-        remember that inputs and targets are tensors of indexes of size (B,T)
+        - function to evaluate model given inputs and expected output
+        - returns logits over tokens and the loss (unless targets not provided)
+        - remember that inputs and targets are tensors of indexes of size (B,T)
+        - C here is N_EMBD
         """
         B, T = inputs_idx.shape
 
         # get logits for what is coming next in the sequence
-        # the embedding table returns shape (B,T,C) where C=N_EMBD
         tok_emb = self.token_embedding_table(inputs_idx)  # (B,T,C)
         pos_emb = self.position_embedding_table(
             torch.arange(T, device=self.device)
         )  # (T,C)
 
         # COMBINE TOKEN and POSITION EMBEDDINGS
-        # C below is N_EMBD
         x = tok_emb + pos_emb  # (B,T,C)
         # pass through all blocks
         x = self.blocks(x)  # (B,T,C)
@@ -249,14 +194,13 @@ class GPT(nn.Module):
         # lastly, return logits over tokens (rather than embedding dimension)
         logits = self.lm_head(x)  # (B,T,vocab_size)
 
-        # sometimes want to retun just the logits and don't have targets to compare against
-        # happens when we are generating
+        # when generating, don't have targets
         if targets_idx is None:
             loss = None
         else:
-            # how well are we predicting the next character compared to the targets?
+            # how well are we predicting the nex ttoken compared to the targets?
             # the cross_entrypy function expects channels to be the second dimension
-            # here we reshape the logits tensor to be (batch*time, channels) to comply with this
+            # --> reshape the logits tensor to be (batch*time, channels) to comply with this
             B, T, C = logits.shape
             logits = logits.view(B * T, C)
             targets_idx = targets_idx.view(B * T)
@@ -268,7 +212,7 @@ class GPT(nn.Module):
         """
         Generate max_new_tokens given inputs.
         """
-        # context is (B,T) tensor
+        # context is a (B,T) tensor
 
         # here loop over max_new_tokens, at each step take the last block_size items
         # and generate the next item --> append this to context
@@ -278,7 +222,7 @@ class GPT(nn.Module):
             idx_cond = context[:, -block_size:]
             # generate logits over next tokens
             logits, loss = self(idx_cond)
-            # focus only on the last timestep i.e., get (B, C) tensor
+            # focus only on the last timestep i.e., get (B,C) tensor
             logits = logits[:, -1, :]
             # apply softmax to turn logits into probabilities
             probs = F.softmax(logits, dim=-1)  # (B,C)

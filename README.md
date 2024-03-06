@@ -1,4 +1,4 @@
-# Learning DL
+# Learning Deep Learning
 
 Toy implementations of models and stuff.
 
