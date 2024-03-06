@@ -10,7 +10,7 @@ from model import GPT
 # define loopup tables to go int->char and char->int
 # ====================================
 
-with open("./input.txt", "r", encoding="utf-8") as f:
+with open("input.txt", "r", encoding="utf-8") as f:
     text = f.read()
 unique_chars = sorted(list(set(text)))
 
@@ -73,7 +73,9 @@ for iter in range(max_iters):
     # every once in a while evaluate the loss on train and val data sets
     if iter % eval_interval == 0 or iter == max_iters - 1:
         losses = estimate_loss(model, train_data, val_data, BLOCK_SIZE, BATCH_SIZE)
-        print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        print(
+            f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}"
+        )
 
     # sample a batch of data
     xb, yb = get_batch(train_data, BLOCK_SIZE, BATCH_SIZE)
@@ -96,4 +98,6 @@ for iter in range(max_iters):
 # 0 = new line character so start with input 0 and generate 2000 tokens from there
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
 # generate acts on batches (here we have batch 1) --> index into it
-print(decode(m.generate(context, max_new_tokens=2000, block_size=BLOCK_SIZE)[0].tolist()))
+print(
+    decode(m.generate(context, max_new_tokens=2000, block_size=BLOCK_SIZE)[0].tolist())
+)

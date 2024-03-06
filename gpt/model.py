@@ -4,6 +4,8 @@
 # Torch instructions say explicitly to implement the forward method for each module.
 # This never gets called, instead just call the module itself.
 #
+# nn.Linear(features_in_dim, features_out_dim)
+#
 # Throughout use B,T,C to indicate dimensions:
 # B = BATCH_SIZE
 # T = TIME (BLOCK_SIZE i.e., where in the sequence we are within the allowed sequence limit)
@@ -46,7 +48,6 @@
 #   - sort of trains an emsenble of subnetworks
 #   - at inference it is not applied
 #
-# TODO: go over dimensionality of each layer
 # ====================================
 
 import torch
@@ -72,16 +73,16 @@ class Head(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        # TODO: C here is head_size ?! which is not embedding dimension...
-        B, T, C = x.shape
+        # get the BLOCK_SIZE (i.e., T)
+        _, T, _ = x.shape  # (B,T,C) where C=N_EMBD
 
         # each token emits a key, query and a value vector
-        # query: what am I looking for?
-        # key: what do I contain?
-        # value: TODO
-        k = self.key(x)  # (B,T,C)
-        q = self.query(x)  # (B,T,C)
-        v = self.value(x)  # (B,T,C)
+        # query: the search i.e., what I am looking for
+        # key: what do I contain i.e., context, tags, etc.
+        # value: the thing you are searching for
+        k = self.key(x)  # (B,T,C) but C = head_size
+        q = self.query(x)  # (B,T,C) but C = head_size
+        v = self.value(x)  # (B,T,C) but C= head_size
 
         # compute attention scores ("affinities"), all keys communicate with all queries
         # for matrix multiplication need to transpose and handle the channel dimension
@@ -89,9 +90,12 @@ class Head(nn.Module):
         # - the scaling is there to control variance at initialization.
         # - without scaling we might get very divergent values which, when passed through softmax, leads to a very peaky output
         # - i.e, lot of weight given to the large values and very little to the other ones --> avoid this
-        att = q @ k.transpose(-2, -1) * C**-0.5  # (B, T, C) @ (B, C, T) -> (B, T, T)
+        head_size = k.size(-1)
+        att = (
+            q @ k.transpose(-2, -1) * head_size**-0.5
+        )  # (B, T, C) @ (B, C, T) -> (B, T, T)
 
-        # the below line makes this a decoder block (i.e., don't communicate with future tokens) 
+        # the below line makes this a decoder block (i.e., don't communicate with future tokens)
         # - if take out, have an encoder
         # the matrix has values in the lower triangular and -inf in the upper
         att = att.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # (B, T, T)
@@ -118,8 +122,11 @@ class MultiHead(nn.Module):
         super().__init__()
         # ModuleList can be indexed like a Python list but it also "does the right torch stuff"
         # presumably that means the parameters within are registered for optimisation etc.
-        self.heads = nn.ModuleList([Head(head_size, n_embd, block_size, dropout) for _ in range(num_heads)])
-        # TODO: return linear projection - go from (n_heads, n_embd) to (n_embd, n_embd)
+        self.heads = nn.ModuleList(
+            [Head(head_size, n_embd, block_size, dropout) for _ in range(num_heads)]
+        )
+        # return linear projection - from n_embd to n_embd
+        # this is described in the paper as a step after the concatenation
         self.proj = nn.Linear(n_embd, n_embd)
         self.dropout = nn.Dropout(dropout)
 
@@ -167,11 +174,13 @@ class Block(nn.Module):
     def __init__(self, n_embd, n_head, block_size, dropout):
         # n_embd: embedding dimension, n_head: the number of heads we'd like
         super().__init__()
-        # TODO: something about head_size being chosen for "things to work out"
+        # due to having multiple heads, reduce head size to reduce computation
+        # this is described in the paper
+        # if had a single head - this stays n_embd sized
         head_size = n_embd // n_head
         # self-attention i.e., the "communication part"
         self.sa = MultiHead(n_head, head_size, n_embd, block_size, dropout)
-        # feed-forward net i.e.,  the "computation part"
+        # feed-forward net i.e., the "computation part"
         self.ffwd = FFN(n_embd, dropout)
         # apply layer norm (at each step within block
         self.ln1 = nn.LayerNorm(n_embd)
@@ -195,7 +204,9 @@ class GPT(nn.Module):
     Decoder-only transformer.
     """
 
-    def __init__(self, vocab_size, n_embd, block_size, n_head, n_blocks, dropout, device):
+    def __init__(
+        self, vocab_size, n_embd, block_size, n_head, n_blocks, dropout, device
+    ):
         # always have to start with nn.Module init
         super().__init__()
         # nn.Embedding is a simple look up table populated with values drawn
@@ -204,10 +215,12 @@ class GPT(nn.Module):
         # need also a position table to track position info as this gets lots in attention
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
         # create N_BLOCKS with N_HEAD each - this is just a sequential operation
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head, block_size, dropout) for _ in range(n_blocks)])
+        self.blocks = nn.Sequential(
+            *[Block(n_embd, n_head, block_size, dropout) for _ in range(n_blocks)]
+        )
         # final layer norm - apply after all blocks
         self.ln_f = nn.LayerNorm(n_embd)
-        # linear transformation to get output of vocab_size
+        # linear transformation to go from n_embd to vocab_size dimension
         self.lm_head = nn.Linear(n_embd, vocab_size)
         self.device = device
 
@@ -222,9 +235,12 @@ class GPT(nn.Module):
         # get logits for what is coming next in the sequence
         # the embedding table returns shape (B,T,C) where C=N_EMBD
         tok_emb = self.token_embedding_table(inputs_idx)  # (B,T,C)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=self.device))  # (T,C)
+        pos_emb = self.position_embedding_table(
+            torch.arange(T, device=self.device)
+        )  # (T,C)
 
         # COMBINE TOKEN and POSITION EMBEDDINGS
+        # C below is N_EMBD
         x = tok_emb + pos_emb  # (B,T,C)
         # pass through all blocks
         x = self.blocks(x)  # (B,T,C)
