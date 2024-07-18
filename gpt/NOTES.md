@@ -17,6 +17,7 @@
         - query (what am I looking for?)
         - value (the thing you are looking for)    
     - taking a dot product between the key and query gives us an affinity score - indicating how much these tokens should communicate with each other i.e. to what extent is the key the right response to the query (for example, nouns are looking for adjectives, vowels are looking for consonants)
+    - these weights are then multiplied with the value vectors
 - There is no notion of space --> need to positionally encode tokens
 - The example here implements a decoder block by masking out future tokens 
     - turn this into an ecoder block by removing the single line that applies the mask
