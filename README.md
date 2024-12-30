@@ -6,6 +6,5 @@ Toy implementations of models and stuff.
 
 ```bash
 poetry update
-poetry install
 ```
 

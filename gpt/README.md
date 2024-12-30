@@ -5,7 +5,7 @@ The implementation is taken directly from [video](https://www.youtube.com/watch?
 ## Download data
 
 ```bash
-!wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
+wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 ```
 
 ## Train and generate
