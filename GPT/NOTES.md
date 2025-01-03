@@ -27,12 +27,11 @@
     - without scaling we might get very divergent values which, when passed through Softmax, leads to a very peaky output
 
 ## LAYER NORM
-TODO
 
-- very similar to batch norm
-    - across the batch dimension, make sure any individual neuron has unit Gaussian distribution
-    - i.e., it normalises every column in the bach dimension to have 0 mean and 1 SD
-- here normalize the rows rather than the columns (TODO: what are the rows here?!)
+- remember that each batch is a batch_size x feature matrix
+- in batch norm each feature (column) in the batch is normalized (to have 0 mean and 1 SD)
+- in layer norm, we instead normalize each individual sample across features (each row now has 0 mean and 1 SD)
+    - normalization is now independent of batch size and can be applied in the same way at training and test time
 - original transform paper applied layer norm after the transform but now it's common to do it before ("pre-norm formulation")
 
 ## RESIDUAL/SKIP CONNECTIONS
