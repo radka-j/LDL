@@ -1,4 +1,5 @@
 import itertools
+
 import matplotlib.pyplot as plt
 
 
@@ -9,15 +10,15 @@ def get_best_moves(agent, env):
     states = list(itertools.product(range(x), range(y)))
     for state in states:
         available_actions = agent.get_max_actions(state)
-        policy.append(''.join([env.action_symbol[a] for a in available_actions]))
+        policy.append("".join([env.action_symbol[a] for a in available_actions]))
     n_rows, n_cols = env.shape
     print("Estimated optimal moves in each state:")
-    for i in range(0, n_rows*n_cols, n_cols):
-        print(policy[i:i+n_cols])
+    for i in range(0, n_rows * n_cols, n_cols):
+        print(policy[i : i + n_cols])
 
 
 def plot(t_steps):
-    """"
+    """
     Plot number of steps taken within each episode before goal was reached.
     """
     plt.plot([i for i in range(len(t_steps))], t_steps)
@@ -47,5 +48,5 @@ def experiment(env, agent, n_episodes, t_max=100):
             agent.update(reward, new_state, terminal)
             t += 1
         t_steps.append(t)
-        print(F"TOTAL RWARD:{sum(total_reward)}")
+        print(f"TOTAL RWARD:{sum(total_reward)}")
     return t_steps
